@@ -3,6 +3,8 @@ import os
 import subprocess
 import uuid
 from pathlib import Path
+import json
+from xdg_utils import get_xdg_data_dir
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QTabWidget,
@@ -22,6 +24,10 @@ class DTBViewerApp(QMainWindow):
         self.current_dtb_basename = "Untitled"
         self.current_out_dts_tmp_file = None
 
+        self.recent_files = []
+        self.MAX_RECENT_FILES = 10
+        self.load_recent_files()
+
         self.last_search_term = ""
         # Default flags: Case-insensitive. Change if needed.
         # QTextDocument.FindFlag(0) is equivalent to no flags, which means case-insensitive by default
@@ -29,10 +35,42 @@ class DTBViewerApp(QMainWindow):
         # self.last_find_flags = QTextDocument.FindFlag.FindCaseSensitively if you want case-sensitive
         self.last_find_flags = QTextDocument.FindFlag(0) # Default behavior is case-insensitive
 
-        self._init_ui()
+        self._init_ui() # recent_files_menu is created here
+        self.update_recent_files_menu() # Populate menu on startup
 
         if initial_dtb_file:
             self.process_dtb_file(initial_dtb_file)
+
+    def load_recent_files(self):
+        data_dir = get_xdg_data_dir()
+        recent_files_path = data_dir / "recent_files.json"
+        if recent_files_path.exists():
+            try:
+                with open(recent_files_path, "r", encoding="utf-8") as f:
+                    self.recent_files = json.load(f)
+            except (FileNotFoundError, IOError, json.JSONDecodeError) as e:
+                print(f"Warning: Could not load recent files: {e}", file=sys.stderr)
+                self.recent_files = []
+        else:
+            self.recent_files = []
+
+    def save_recent_files(self):
+        data_dir = get_xdg_data_dir()
+        recent_files_path = data_dir / "recent_files.json"
+        try:
+            with open(recent_files_path, "w", encoding="utf-8") as f:
+                json.dump(self.recent_files, f)
+        except (IOError, json.JSONEncodeError) as e: # Changed from general Exception to more specific
+            print(f"Warning: Could not save recent files: {e}", file=sys.stderr)
+
+    def add_to_recent_files(self, file_path_str: str):
+        abs_file_path = str(Path(file_path_str).resolve())
+        if abs_file_path in self.recent_files:
+            self.recent_files.remove(abs_file_path)
+        self.recent_files.insert(0, abs_file_path)
+        self.recent_files = self.recent_files[:self.MAX_RECENT_FILES]
+        self.save_recent_files()
+        self.update_recent_files_menu() # This will be implemented later
 
     def _init_ui(self):
         # --- Menu Bar ---
@@ -50,6 +88,9 @@ class DTBViewerApp(QMainWindow):
         self.save_dts_action.triggered.connect(self.save_dts_as)
         self.save_dts_action.setEnabled(False)
         file_menu.addAction(self.save_dts_action)
+
+        self.recent_files_menu = file_menu.addMenu("Open Recent")
+        # self.update_recent_files_menu() # Called after UI setup and after loading recent files
 
         file_menu.addSeparator()
 
@@ -212,6 +253,7 @@ class DTBViewerApp(QMainWindow):
                     with open(self.current_out_dts_tmp_file, "r", encoding="utf-8", errors="replace") as f:
                         dts_content = f.read()
                     dtc_success = True # dtc ran and output file exists
+                    self.add_to_recent_files(str(in_dtb_file_path))
                     if not stderr_lines: # If dtc was successful and no errors, add a success message
                          stderr_lines.append("dtc command executed successfully.")
                          issues_count = len(stderr_lines) # Update count if it was 0
@@ -291,6 +333,7 @@ class DTBViewerApp(QMainWindow):
     def clear_views(self):
         self.current_dts_content = ""
         self.current_dtb_basename = "Untitled"
+        # self.recent_files is intentionally not cleared here
         
         self.dts_text_edit.clear()
         self.issues_text_edit.clear()
@@ -311,6 +354,62 @@ class DTBViewerApp(QMainWindow):
             except OSError as e:
                 print(f"Warning: Could not delete temporary file {self.current_out_dts_tmp_file} on exit: {e}")
         super().closeEvent(event)
+
+    def update_recent_files_menu(self):
+        if not hasattr(self, 'recent_files_menu'):
+            print("Warning: recent_files_menu attribute does not exist. UI not fully initialized?", file=sys.stderr)
+            return
+
+        self.recent_files_menu.clear()
+        if not self.recent_files:
+            no_recent_action = QAction("No Recent Files", self)
+            no_recent_action.setEnabled(False)
+            self.recent_files_menu.addAction(no_recent_action)
+            self.recent_files_menu.setEnabled(False)
+        else:
+            self.recent_files_menu.setEnabled(True)
+            for file_path_str in self.recent_files:
+                # To make menu items more readable, display only filename or part of path
+                p = Path(file_path_str)
+                display_text = p.name
+                # Potentially add more sophisticated shortening later if needed
+                # For example, if parent + name is too long: f".../{p.parent.name}/{p.name}"
+
+                action = QAction(display_text, self)
+                action.setToolTip(file_path_str) # Show full path in tooltip
+                action.triggered.connect(
+                    lambda checked=False, path=file_path_str: self.open_recent_file_action(path)
+                )
+                self.recent_files_menu.addAction(action)
+
+            self.recent_files_menu.addSeparator()
+            clear_action = QAction("Clear Recent Files List", self)
+            clear_action.triggered.connect(self.clear_recent_files_list_action)
+            self.recent_files_menu.addAction(clear_action)
+
+    def open_recent_file_action(self, file_path: str):
+        p = Path(file_path)
+        if p.is_file():
+            self.process_dtb_file(file_path) # process_dtb_file expects a string
+        else:
+            reply = QMessageBox.warning(
+                self,
+                "File Not Found",
+                f"The file '{file_path}' no longer exists or is not accessible.",
+                informativeText="Do you want to remove it from the recent files list?",
+                buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                defaultButton=QMessageBox.StandardButton.Yes
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                if file_path in self.recent_files:
+                    self.recent_files.remove(file_path)
+                    self.save_recent_files()
+                    self.update_recent_files_menu()
+
+    def clear_recent_files_list_action(self):
+        self.recent_files.clear()
+        self.save_recent_files()
+        self.update_recent_files_menu()
 
 
 def main():
