@@ -18,7 +18,7 @@ from PyQt6.QtCore import Qt
 class DTBViewerApp(QMainWindow):
     def __init__(self, initial_dtb_file=None):
         super().__init__()
-        self.setWindowTitle("DTB Viewer & DTS Converter")
+        self.setWindowTitle("DTB Viewer")
         self.setGeometry(100, 100, 800, 600)
 
         self.current_dts_content = ""
