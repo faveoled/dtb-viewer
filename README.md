@@ -1,4 +1,4 @@
-## Dependencies for Ubuntu 24.04
+### Dependencies
 
 ```bash
 sudo apt update
