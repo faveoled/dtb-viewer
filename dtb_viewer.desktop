@@ -2,8 +2,8 @@
 Version=1.0
 Name=DTB Viewer
 Comment=A viewer for DTB files
-Exec=python3 dtb_viewer.py %F
-Icon=dtb-viewer.svg
+Exec=dtb-viewer %U
+Icon=dtb-viewer
 MimeType=text/x-devicetree-binary;
 Terminal=false
 Type=Application
